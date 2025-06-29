@@ -8,35 +8,24 @@ import logging
 import sys
 import requests
 
-# 로그 파일 및 콘솔 동시 출력 설정
-import sys
-
+# === 로그 클래스 설정 ===
 class DualLogger:
     def __init__(self):
         self.terminal = sys.stdout
         self.log_all = open("trade_all.log", "a", encoding="utf-8")
         self.log_filtered = open("trade.log", "a", encoding="utf-8")
-        self._skip_next_newline = False  # 상태 저장용
+        self._skip_next_newline = False
 
     def write(self, message):
-        # 항상 콘솔과 전체 로그에는 출력
         self.terminal.write(message)
         self.log_all.write(message)
-
-        # 이전 메시지가 "거래 없음"이고 지금 메시지가 줄바꿈이면 필터링
         if self._skip_next_newline and message == "\n":
             self._skip_next_newline = False
             return
-
-        # 이번 메시지가 "거래 없음"이면 필터하고, 다음 줄바꿈도 스킵 예약
         if "거래 없음" in message.strip():
             self._skip_next_newline = True
             return
-
-        # 그 외의 메시지는 정상적으로 기록
         self.log_filtered.write(message)
-
-        # flush는 항상 수행
         self.terminal.flush()
         self.log_all.flush()
         self.log_filtered.flush()
@@ -48,185 +37,120 @@ class DualLogger:
 
 sys.stdout = DualLogger()
 
-
-# === 1. API 키 입력 ===
+# === 환경 변수 및 Upbit 객체 ===
 load_dotenv()
 access_key = os.getenv("ACCESS_KEY")
 secret_key = os.getenv("SECRET_KEY")
 upbit = pyupbit.Upbit(access_key, secret_key)
 
-# === 2. 관리할 티커 리스트 및 prev_rsi 딕셔너리 ===
+# === EMA 계산 ===
+def get_ema(df, period=200):
+    return df['close'].rolling(window=period).mean()
 
-# === 3. 로그인 및 계정 정보 확인 ===
-def check_login():
-    try:
-        balances = upbit.get_balances()
-        krw_balance = upbit.get_balance("KRW")
-        if balances and krw_balance is not None:
-            print(f"[로그인 성공] 보유 원화: {krw_balance:,.0f}원")
-            return True
-        else:
-            print("[로그인 실패] 계정 정보 없음")
-            return False
-    except Exception as e:
-        print(f"[로그인 오류] {str(e)}")
-        return False
+# === MACD 계산 ===
+def calculate_macd(df, short_period=12, long_period=26, signal_period=9):
+    df['EMA12'] = df['close'].ewm(span=short_period, adjust=False).mean()
+    df['EMA26'] = df['close'].ewm(span=long_period, adjust=False).mean()
+    df['MACD'] = df['EMA12'] - df['EMA26']
+    df['Signal'] = df['MACD'].ewm(span=signal_period, adjust=False).mean()
+    df['Histogram'] = df['MACD'] - df['Signal']
+    return df
 
-# === 4. RSI 계산 함수 (Wilder 공식) ===
-def get_rsi(ticker, interval="minute5", period=14):
-    try:
-        df = pyupbit.get_ohlcv(ticker, interval=interval, count=200)
-        if df is None or df.empty:
-            print(f"[{ticker}] [RSI 오류] 데이터 수신 실패")
-            return None
-            
-        delta = df['close'].diff().dropna()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-
-        # 초기 평균 계산 (첫 14개 데이터)
-        avg_gain = [gain.iloc[:period].mean()]
-        avg_loss = [loss.iloc[:period].mean()]
-
-        # Wilder 스무딩 적용
-        for i in range(period, len(gain)):
-            new_avg_gain = (avg_gain[-1] * (period-1) + gain.iloc[i]) / period
-            new_avg_loss = (avg_loss[-1] * (period-1) + loss.iloc[i]) / period
-            avg_gain.append(new_avg_gain)
-            avg_loss.append(new_avg_loss)
-
-        # RSI 계산
-        rs = pd.Series(avg_gain) / pd.Series(avg_loss)
-        rsi = 100 - (100 / (1 + rs))
-        return rsi.iloc[-1]
-
-    except Exception as e:
-        print(f"[{ticker}] [RSI 계산 오류] {str(e)}")
+# === 최근 20개 캔들 중 최저가 ===
+def get_recent_low(ticker, interval="minute5", count=20):
+    df = pyupbit.get_ohlcv(ticker, interval=interval, count=count)
+    if df is None or df.empty:
+        print(f"[{ticker}] 캔들 데이터 수신 실패")
         return None
+    return df['low'].min()
 
-# === 5. 자동매매 함수 ===
+# === 자동매매 함수 ===
 def auto_trade(ticker, investment=5000):
-    global prev_rsi_dict
     global prev_buy_dict
     current_balance = upbit.get_balance(ticker)
     krw_balance = upbit.get_balance("KRW")
     current_price = pyupbit.get_current_price(ticker)
 
-    try:
-        if prev_rsi_dict[ticker] is not None:
-            if prev_rsi_dict[ticker] >= 65 and current_balance > 0:
-                time.sleep(10)
-            if prev_rsi_dict[ticker] <= 30 and krw_balance > 5000:
-                time.sleep(10)
-    except:
-        print("참을 수가 없어.")
-        return
-
-    current_rsi = get_rsi(ticker)
-    if current_rsi is None:
-        print(f"[{ticker}] [거래 중단] RSI 계산 실패")
+    df = pyupbit.get_ohlcv(ticker, interval="minute5", count=200)
+    if df is None or df.empty:
+        print(f"[{ticker}] [데이터 수신 실패]")
         return
 
     try:
-        
-        # ✅ 손절 조건: 매수가 -3% 하락 시 강제 매도
+        ema_200 = get_ema(df, period=200).iloc[-1]
+        price_ema_gap = (current_price - ema_200) / ema_200
+
+        df_macd = calculate_macd(df)
+        macd_now = df_macd['MACD'].iloc[-1]
+        signal_now = df_macd['Signal'].iloc[-1]
+        macd_prev = df_macd['MACD'].iloc[-2]
+        signal_prev = df_macd['Signal'].iloc[-2]
+
+        # 매도 조건
         if current_balance > 0 and prev_buy_dict[ticker] is not None:
-            stop_loss_price = prev_buy_dict[ticker] * 0.97
-            
-            if current_price * current_balance < stop_loss_price:
+            buy_info = prev_buy_dict[ticker]
+            stop_loss_price = buy_info['stop_loss']
+            take_profit_price = buy_info['take_profit']
+
+            if current_price >= take_profit_price:
                 result = upbit.sell_market_order(ticker, current_balance)
                 if result and 'uuid' in result:
-                    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    earned_money = upbit.get_balance("KRW") - prev_buy_dict[ticker]
-                    earned_percentage = round(earned_money / prev_buy_dict[ticker] * 100, 2)
-                    print(f"[{ticker}] [손절 매도 ({current_time})] 현재가: {current_price:.2f}, 손절 기준가: {stop_loss_price:.2f}")
-                    print(f"[{ticker}] [손실 정리] 수익금: {earned_money:.2f}, 수익률: {earned_percentage}%")
+                    earned_money = upbit.get_balance("KRW") - buy_info['buy_price']
+                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2)
+                    print(f"[{ticker}] [익절 매도] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
                     prev_buy_dict[ticker] = None
-                    prev_rsi_dict[ticker] = None
                     return
 
-        # 매수 조건: RSI 30 아래→위로 반등 & 미보유
-        if prev_rsi_dict[ticker] is not None:
-            # 매수
-            if prev_rsi_dict[ticker] <= 30 and current_rsi > 30 and krw_balance >= investment:
-                if krw_balance // 2 > investment:
-                    order_amount = krw_balance // 2
-                else:
-                    order_amount = investment
-                result = upbit.buy_market_order(ticker, order_amount)
-                if result and 'uuid' in result:
-                    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    ticker_balance_after = upbit.get_balance(ticker)
-                    print(f"[{ticker}] [매수 성공 ({current_time})] {order_amount}원")
-                    prev_buy_dict[ticker] = ticker_balance_after * current_price
-                else:
-                    print(f"[{ticker}] [매수 실패] 주문 생성 오류: {result}")
-
-            # 매도 조건: RSI 65 위→아래로 반락 & 보유 중
-            elif prev_rsi_dict[ticker] >= 65 and current_rsi < 65 and current_balance > 0:
+            elif current_price <= stop_loss_price:
                 result = upbit.sell_market_order(ticker, current_balance)
-                krw_balance_after = upbit.get_balance("KRW")
                 if result and 'uuid' in result:
-                    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    print(f"[{ticker}] [매도 성공 ({current_time})] 매수 가격: {prev_buy_dict[ticker]}")
+                    loss_money = upbit.get_balance("KRW") - buy_info['buy_price']
+                    loss_percentage = round(loss_money / buy_info['buy_price'] * 100, 2)
+                    print(f"[{ticker}] [손절 매도] 현재가: {current_price:.2f}, 수익률: {loss_percentage}%")
                     prev_buy_dict[ticker] = None
-                else:
-                    print(f"[{ticker}] [매도 실패] 주문 생성 오류: {result}")
+                    return
 
-            # 거래 없음
-            else:
-                valuation = current_balance * current_price if current_balance and current_price else 0
-                current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                print(f"[{ticker}] [거래 없음 ({current_time})] 이전 RSI: {prev_rsi_dict[ticker]:.2f}, 현재 RSI: {current_rsi:.2f}, 평가 가치: {valuation:,.0f}원")
+        # 매수 조건
+        
+        if macd_now > signal_now and macd_prev <= signal_prev:
+            if macd_now < 0 and signal_now < 0:
+                if current_price > ema_200 and price_ema_gap >= 0.01:
+                    order_amount = min(investment, krw_balance)
+                    result = upbit.buy_market_order(ticker, order_amount)
+                    if result and 'uuid' in result:
+                        ticker_balance_after = upbit.get_balance(ticker)
+                        actual_buy_price = current_price
+                        stop_loss_price = max(ema_200 * 0.99, get_recent_low(ticker))
+                        if stop_loss_price == get_recent_low(ticker):
+                            take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker) * 1.5)
+                        else:
+                            take_profit_price = actual_buy_price + (actual_buy_price - ema_200) * 1.5
+                        prev_buy_dict[ticker] = {
+                            'buy_price': actual_buy_price * ticker_balance_after,
+                            'stop_loss': stop_loss_price,
+                            'take_profit': take_profit_price
+                        }
+                        print(f"[{ticker}] [매수 성공] {order_amount}원 / 현재가: {actual_buy_price:.2f}")
+                        print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
+                    else:
+                        print(f"[{ticker}] [매수 실패] 주문 오류: {result}")
+                    return
 
-        # 첫 실행 시 prev_rsi 초기화
-        prev_rsi_dict[ticker] = current_rsi
-
-    except UpbitError as ue:
-        print(f"[{ticker}] [API 오류] 코드: {ue.code}, 메시지: {ue.message}")
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "insufficient" in error_msg:
-            print(f"[{ticker}] [거래 실패] 잔고 부족: {str(e)}")
-        elif "connection" in error_msg or "timeout" in error_msg:
-            print(f"[{ticker}] [거래 실패] 네트워크 오류: {str(e)}")
-        elif "429" in error_msg:
-            print(f"[{ticker}] [거래 실패] 요청 과다(429): {str(e)}")
+        # 거래 없음 로그
         else:
-            print(f"[{ticker}] [거래 실패] 기타 오류: {str(e)}")
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"[{ticker}] [거래 없음 ({current_time})] MACD: {macd_now:.4f}, Signal: {signal_now:.4f}, 가격: {current_price:.2f}, EMA200: {ema_200:.2f}, {get_recent_low(ticker)}")
 
-# === 6. 코인 명단 가져오기 ===
+    except Exception as e:
+        print(f"[{ticker}] [오류 발생] {str(e)}")
 
-def get_krw_market_tickers():
-    url = "https://api.upbit.com/v1/market/all"
-    headers = {"Accept": "application/json"}
-    response = requests.get(url, headers=headers)
-    data = response.json()
-    
-    # KRW 마켓 필터링
-    krw_tickers = [item['market'] for item in data if item['market'].startswith('KRW-')]
-    return krw_tickers
-
-def get_ticker_volumes(tickers):
-    url = f"https://api.upbit.com/v1/ticker?markets={','.join(tickers)}"
-    response = requests.get(url)
-    data = response.json()
-
-    # 거래량 계산: acc_trade_price_24h 사용 (24시간 누적 거래대금)
-    df = pd.DataFrame(data)
-    df = df[['market', 'acc_trade_price_24h']]
-    df = df.sort_values(by='acc_trade_price_24h', ascending=False).reset_index(drop=True)
-
-    return df
-
+# === 유의 종목 필터 ===
 def get_caution_tickers():
     url = "https://api.upbit.com/v1/market/all?isDetails=true"
     headers = {"Accept": "application/json"}
     response = requests.get(url, headers=headers)
     data = response.json()
-
     caution_tickers = []
-
     for item in data:
         market = item.get("market")
         if "KRW" not in market:
@@ -234,46 +158,43 @@ def get_caution_tickers():
         market_event = item.get("market_event", {})
         warning = market_event.get("warning", False)
         caution_flags = market_event.get("caution", {})
-
-        # warning이 True이거나 caution 항목 중 하나라도 True이면 유의 종목
         if warning or any(caution_flags.values()):
             caution_tickers.append(market)
-
     return caution_tickers
 
-    # === 6. 메인 루프 ===
+# === 티커 정렬 및 루프 ===
+def get_krw_market_tickers():
+    url = "https://api.upbit.com/v1/market/all"
+    headers = {"Accept": "application/json"}
+    response = requests.get(url, headers=headers)
+    data = response.json()
+    krw_tickers = [item['market'] for item in data if item['market'].startswith('KRW-')]
+    return krw_tickers
+
+def get_ticker_volumes(tickers):
+    url = f"https://api.upbit.com/v1/ticker?markets={','.join(tickers)}"
+    response = requests.get(url)
+    data = response.json()
+    df = pd.DataFrame(data)
+    df = df[['market', 'acc_trade_price_24h']]
+    df = df.sort_values(by='acc_trade_price_24h', ascending=False).reset_index(drop=True)
+    return df
+
 if __name__ == "__main__":
-    if not check_login():
-        exit("프로그램 종료: 로그인 실패")
-    
-    krw_tickers = get_krw_market_tickers()
-    volume_df = get_ticker_volumes(krw_tickers)
-    CANDIDATES = volume_df['market'][:21]
+    # krw_tickers = get_krw_market_tickers()
+    # volume_df = get_ticker_volumes(krw_tickers)
+    # CANDIDATES = volume_df['market'][:20]
+    # caution_tickers = get_caution_tickers()
+    # CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
+    # CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
 
-    # 투자유의 종목 제거
-    caution_tickers = get_caution_tickers()
-    #print(caution_tickers)
-    
-    CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
-    CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
+    CANDIDATES = ['KRW-AERGO']
+    prev_buy_dict = {ticker: None for ticker in CANDIDATES}
 
-    candidate_rsi_dict = {candidate: None for candidate in CANDIDATES}
-
-    # print(CANDIDATES)
-    for candidate in CANDIDATES:
-        candidate_rsi_dict[candidate] = get_rsi(candidate)
-        # print(candidate_rsi_dict)
-    sorted_candidates_dict = dict(sorted(candidate_rsi_dict.items(), key=lambda item: item[1]))
-    # print(sorted_candidates_dict)
-    TICKERS = list(sorted_candidates_dict.keys())[:3]
-    # TICKERS = ['KRW-MASK', 'KRW-BTC', 'KRW-SOL', 'KRW-DOGE']
-    prev_rsi_dict = {ticker: None for ticker in TICKERS}
-    prev_buy_dict = {ticker: None for ticker in TICKERS}
-
-    print(f"=== 자동매매 시작: {', '.join(TICKERS)} ===")
+    print(f"=== 자동매매 시작: {', '.join(CANDIDATES)} ===")
     while True:
         try:
-            for ticker in TICKERS:
+            for ticker in CANDIDATES:
                 auto_trade(ticker)
         except Exception as e:
             print(f"[시스템 오류] {str(e)}")
