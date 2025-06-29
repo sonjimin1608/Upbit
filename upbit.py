@@ -108,26 +108,42 @@ def get_rsi(ticker, interval="minute5", period=14):
 def auto_trade(ticker, investment=5000):
     global prev_rsi_dict
     global prev_buy_dict
-    ticker_balance = upbit.get_balance(ticker)
+    current_balance = upbit.get_balance(ticker)
     krw_balance = upbit.get_balance("KRW")
+    current_price = pyupbit.get_current_price(ticker)
 
     try:
         if prev_rsi_dict[ticker] is not None:
-            if prev_rsi_dict[ticker] >= 65 and ticker_balance > 0:
+            if prev_rsi_dict[ticker] >= 65 and current_balance > 0:
                 time.sleep(10)
-            
             if prev_rsi_dict[ticker] <= 30 and krw_balance > 5000:
                 time.sleep(10)
     except:
         print("참을 수가 없어.")
         return
+
     current_rsi = get_rsi(ticker)
     if current_rsi is None:
         print(f"[{ticker}] [거래 중단] RSI 계산 실패")
         return
 
     try:
-        current_price = pyupbit.get_current_price(ticker)
+        
+        # ✅ 손절 조건: 매수가 -3% 하락 시 강제 매도
+        if current_balance > 0 and prev_buy_dict[ticker] is not None:
+            stop_loss_price = prev_buy_dict[ticker] * 0.97
+            
+            if current_price * current_balance < stop_loss_price:
+                result = upbit.sell_market_order(ticker, current_balance)
+                if result and 'uuid' in result:
+                    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    earned_money = upbit.get_balance("KRW") - prev_buy_dict[ticker]
+                    earned_percentage = round(earned_money / prev_buy_dict[ticker] * 100, 2)
+                    print(f"[{ticker}] [손절 매도 ({current_time})] 현재가: {current_price:.2f}, 손절 기준가: {stop_loss_price:.2f}")
+                    print(f"[{ticker}] [손실 정리] 수익금: {earned_money:.2f}, 수익률: {earned_percentage}%")
+                    prev_buy_dict[ticker] = None
+                    prev_rsi_dict[ticker] = None
+                    return
 
         # 매수 조건: RSI 30 아래→위로 반등 & 미보유
         if prev_rsi_dict[ticker] is not None:
@@ -141,29 +157,29 @@ def auto_trade(ticker, investment=5000):
                 if result and 'uuid' in result:
                     current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                     ticker_balance_after = upbit.get_balance(ticker)
-                    print(f"[{ticker}] [매수 성공 ({current_time})] {order_amount}원 | 총 매수 금액: {ticker_balance_after * current_price}")
+                    print(f"[{ticker}] [매수 성공 ({current_time})] {order_amount}원")
                     prev_buy_dict[ticker] = ticker_balance_after * current_price
                 else:
                     print(f"[{ticker}] [매수 실패] 주문 생성 오류: {result}")
-            # 매도
-            elif prev_rsi_dict[ticker] >= 65 and current_rsi < 65 and ticker_balance > 0:
-                result = upbit.sell_market_order(ticker, ticker_balance)
-                krw_balance_after = upbit.get_balance("KRW")
 
+            # 매도 조건: RSI 65 위→아래로 반락 & 보유 중
+            elif prev_rsi_dict[ticker] >= 65 and current_rsi < 65 and current_balance > 0:
+                result = upbit.sell_market_order(ticker, current_balance)
+                krw_balance_after = upbit.get_balance("KRW")
                 if result and 'uuid' in result:
                     current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    earned_money = krw_balance_after - prev_buy_dict[ticker]
-                    earned_percentage = round(earned_money / prev_buy_dict[ticker] * 100, 2)
-                    print(f"[{ticker}] [매도 성공 ({current_time})] {krw_balance_after}원 | 수익금: {earned_money} | 수익률: {earned_percentage}%")
+                    print(f"[{ticker}] [매도 성공 ({current_time})] 매수 가격: {prev_buy_dict[ticker]}")
+                    prev_buy_dict[ticker] = None
                 else:
                     print(f"[{ticker}] [매도 실패] 주문 생성 오류: {result}")
+
             # 거래 없음
             else:
-                current_price = pyupbit.get_current_price(ticker)
-                valuation = ticker_balance * current_price if ticker_balance is not None and current_price is not None else 0
+                valuation = current_balance * current_price if current_balance and current_price else 0
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                print(f"[{ticker}] [거래 없음 ({current_time}))] 이전 RSI: {prev_rsi_dict[ticker]:.2f}, 현재 RSI: {current_rsi:.2f}, 평가 가치: {valuation:,.0f}원")
-        # 첫 실행시 prev_rsi 초기화
+                print(f"[{ticker}] [거래 없음 ({current_time})] 이전 RSI: {prev_rsi_dict[ticker]:.2f}, 현재 RSI: {current_rsi:.2f}, 평가 가치: {valuation:,.0f}원")
+
+        # 첫 실행 시 prev_rsi 초기화
         prev_rsi_dict[ticker] = current_rsi
 
     except UpbitError as ue:
@@ -203,28 +219,54 @@ def get_ticker_volumes(tickers):
 
     return df
 
-# === 6. 메인 루프 ===
+def get_caution_tickers():
+    url = "https://api.upbit.com/v1/market/all?isDetails=true"
+    headers = {"Accept": "application/json"}
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    caution_tickers = []
+
+    for item in data:
+        market = item.get("market")
+        if "KRW" not in market:
+            continue
+        market_event = item.get("market_event", {})
+        warning = market_event.get("warning", False)
+        caution_flags = market_event.get("caution", {})
+
+        # warning이 True이거나 caution 항목 중 하나라도 True이면 유의 종목
+        if warning or any(caution_flags.values()):
+            caution_tickers.append(market)
+
+    return caution_tickers
+
+    # === 6. 메인 루프 ===
 if __name__ == "__main__":
     if not check_login():
         exit("프로그램 종료: 로그인 실패")
     
-    # krw_tickers = get_krw_market_tickers()
-    # volume_df = get_ticker_volumes(krw_tickers)
-    # CANDIDATES = volume_df['market'][:23]
-    # CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
-    # CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
-    # CANDIDATES = [ticker for ticker in CANDIDATES if "ANIME" not in ticker]
+    krw_tickers = get_krw_market_tickers()
+    volume_df = get_ticker_volumes(krw_tickers)
+    CANDIDATES = volume_df['market'][:21]
 
-    # candidate_rsi_dict = {candidate: None for candidate in CANDIDATES}
+    # 투자유의 종목 제거
+    caution_tickers = get_caution_tickers()
+    #print(caution_tickers)
+    
+    CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
+    CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
 
-    # # print(CANDIDATES)
-    # for candidate in CANDIDATES:
-    #     candidate_rsi_dict[candidate] = get_rsi(candidate)
-    #     # print(candidate_rsi_dict)
-    # sorted_candidates_dict = dict(sorted(candidate_rsi_dict.items(), key=lambda item: item[1]))
-    # # print(sorted_candidates_dict)
-    # TICKERS = list(sorted_candidates_dict.keys())[:3]
-    TICKERS = ['KRW-MASK', 'KRW-BTC', 'KRW-SOL', 'KRW-DOGE']
+    candidate_rsi_dict = {candidate: None for candidate in CANDIDATES}
+
+    # print(CANDIDATES)
+    for candidate in CANDIDATES:
+        candidate_rsi_dict[candidate] = get_rsi(candidate)
+        # print(candidate_rsi_dict)
+    sorted_candidates_dict = dict(sorted(candidate_rsi_dict.items(), key=lambda item: item[1]))
+    # print(sorted_candidates_dict)
+    TICKERS = list(sorted_candidates_dict.keys())[:3]
+    # TICKERS = ['KRW-MASK', 'KRW-BTC', 'KRW-SOL', 'KRW-DOGE']
     prev_rsi_dict = {ticker: None for ticker in TICKERS}
     prev_buy_dict = {ticker: None for ticker in TICKERS}
 
