@@ -56,7 +56,7 @@ def calculate_macd(df, short_period=12, long_period=26, signal_period=9):
     df['Histogram'] = df['MACD'] - df['Signal']
     return df
 
-# === 최근 20개 캔들 중 최저가 ===
+# === 최근 20개 캔들 중 최저가 (돈치안 채널 하단) ===
 def get_recent_low(ticker, interval="minute5", count=20):
     df = pyupbit.get_ohlcv(ticker, interval=interval, count=count)
     if df is None or df.empty:
@@ -67,6 +67,7 @@ def get_recent_low(ticker, interval="minute5", count=20):
 # === 자동매매 함수 ===
 def auto_trade(ticker, investment=5000):
     global prev_buy_dict
+    global CANDIDATES
     current_balance = upbit.get_balance(ticker)
     krw_balance = upbit.get_balance("KRW")
     current_price = pyupbit.get_current_price(ticker)
@@ -87,6 +88,10 @@ def auto_trade(ticker, investment=5000):
         signal_prev = df_macd['Signal'].iloc[-2]
 
         # 매도 조건
+        if current_balance is None:
+            print(f"[{ticker}] [오류] 잔고 조회 실패 (current_balance=None)")
+            return
+
         if current_balance > 0 and prev_buy_dict[ticker] is not None:
             buy_info = prev_buy_dict[ticker]
             stop_loss_price = buy_info['stop_loss']
@@ -94,6 +99,13 @@ def auto_trade(ticker, investment=5000):
 
             if current_price >= take_profit_price:
                 result = upbit.sell_market_order(ticker, current_balance)
+                krw_tickers = get_krw_market_tickers()
+                volume_df = get_ticker_volumes(krw_tickers)
+                CANDIDATES = volume_df['market'][:22]
+                caution_tickers = get_caution_tickers()
+                CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
+                CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
+                CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
                     earned_money = upbit.get_balance("KRW") - buy_info['buy_price']
                     earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2)
@@ -101,8 +113,15 @@ def auto_trade(ticker, investment=5000):
                     prev_buy_dict[ticker] = None
                     return
 
-            elif current_price <= stop_loss_price:
+            elif current_price < stop_loss_price:
                 result = upbit.sell_market_order(ticker, current_balance)
+                krw_tickers = get_krw_market_tickers()
+                volume_df = get_ticker_volumes(krw_tickers)
+                CANDIDATES = volume_df['market'][:22]
+                caution_tickers = get_caution_tickers()
+                CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
+                CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
+                CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
                     loss_money = upbit.get_balance("KRW") - buy_info['buy_price']
                     loss_percentage = round(loss_money / buy_info['buy_price'] * 100, 2)
@@ -114,15 +133,17 @@ def auto_trade(ticker, investment=5000):
         
         if macd_now > signal_now and macd_prev <= signal_prev:
             if macd_now < 0 and signal_now < 0:
-                if current_price > ema_200 and price_ema_gap >= 0.01:
-                    order_amount = min(investment, krw_balance)
+                # if current_price > ema_200 and price_ema_gap >= 0.01:
+                if current_price > ema_200:
+                    order_amount = krw_balance * 0.99
                     result = upbit.buy_market_order(ticker, order_amount)
+                    CANDIDATES = [ticker]
                     if result and 'uuid' in result:
                         ticker_balance_after = upbit.get_balance(ticker)
                         actual_buy_price = current_price
-                        stop_loss_price = max(ema_200 * 0.99, get_recent_low(ticker))
+                        stop_loss_price = max(ema_200 * 1.5, get_recent_low(ticker) * 2)
                         if stop_loss_price == get_recent_low(ticker):
-                            take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker) * 1.5)
+                            take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 2
                         else:
                             take_profit_price = actual_buy_price + (actual_buy_price - ema_200) * 1.5
                         prev_buy_dict[ticker] = {
@@ -139,7 +160,8 @@ def auto_trade(ticker, investment=5000):
         # 거래 없음 로그
         else:
             current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            print(f"[{ticker}] [거래 없음 ({current_time})] MACD: {macd_now:.4f}, Signal: {signal_now:.4f}, 가격: {current_price:.2f}, EMA200: {ema_200:.2f}, {get_recent_low(ticker)}")
+            print(f"[{ticker:<13}] [거래 없음 ({current_time})] MACD: {macd_now:<14.4f}, Signal: {signal_now:<14.4f}, 가격: {current_price:<13.2f}, EMA200: {ema_200:<13.2f}")
+            
 
     except Exception as e:
         print(f"[{ticker}] [오류 발생] {str(e)}")
@@ -180,15 +202,35 @@ def get_ticker_volumes(tickers):
     df = df.sort_values(by='acc_trade_price_24h', ascending=False).reset_index(drop=True)
     return df
 
-if __name__ == "__main__":
-    # krw_tickers = get_krw_market_tickers()
-    # volume_df = get_ticker_volumes(krw_tickers)
-    # CANDIDATES = volume_df['market'][:20]
-    # caution_tickers = get_caution_tickers()
-    # CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
-    # CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
+def check_login():
+    try:
+        balances = upbit.get_balances()
+        krw_balance = upbit.get_balance("KRW")
+        if balances and krw_balance is not None:
+            print(f"[로그인 성공] 보유 원화: {krw_balance:,.0f}원")
+            return True
+        else:
+            print("[로그인 실패] 계정 정보 없음")
+            return False
+    except Exception as e:
+        print(f"[로그인 오류] {str(e)}")
+        return False
 
-    CANDIDATES = ['KRW-AERGO']
+if __name__ == "__main__":
+    if not check_login():
+        exit("프로그램 종료: 로그인 실패")
+
+    global CANDIDATES
+    krw_tickers = get_krw_market_tickers()
+    volume_df = get_ticker_volumes(krw_tickers)
+    CANDIDATES = volume_df['market'][:22]
+    caution_tickers = get_caution_tickers()
+    CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
+    CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
+    CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
+
+
+    # CANDIDATES = ['KRW-AERGO']
     prev_buy_dict = {ticker: None for ticker in CANDIDATES}
 
     print(f"=== 자동매매 시작: {', '.join(CANDIDATES)} ===")
