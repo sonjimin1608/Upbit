@@ -108,7 +108,7 @@ def auto_trade(ticker, investment=5000):
                 CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
                     earned_money = upbit.get_balance("KRW") - buy_info['buy_price']
-                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2)
+                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2) * (-1)
                     print(f"[{ticker}] [익절 매도] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
                     prev_buy_dict[ticker] = None
                     return
@@ -124,7 +124,7 @@ def auto_trade(ticker, investment=5000):
                 CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
                     loss_money = upbit.get_balance("KRW") - buy_info['buy_price']
-                    loss_percentage = round(loss_money / buy_info['buy_price'] * 100, 2)
+                    loss_percentage = round(loss_money / buy_info['buy_price'] * 100, 2) * (-1)
                     print(f"[{ticker}] [손절 매도] 현재가: {current_price:.2f}, 수익률: {loss_percentage}%")
                     prev_buy_dict[ticker] = None
                     return
@@ -141,7 +141,7 @@ def auto_trade(ticker, investment=5000):
                     if result and 'uuid' in result:
                         ticker_balance_after = upbit.get_balance(ticker)
                         actual_buy_price = current_price
-                        stop_loss_price = max(ema_200 * 1.5, get_recent_low(ticker) * 2)
+                        stop_loss_price = max(ema_200, get_recent_low(ticker))
                         if stop_loss_price == get_recent_low(ticker):
                             take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 2
                         else:
@@ -153,6 +153,7 @@ def auto_trade(ticker, investment=5000):
                         }
                         print(f"[{ticker}] [매수 성공] {order_amount}원 / 현재가: {actual_buy_price:.2f}")
                         print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
+                        time.sleep(120)
                     else:
                         print(f"[{ticker}] [매수 실패] 주문 오류: {result}")
                     return
