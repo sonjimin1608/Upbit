@@ -79,7 +79,6 @@ def auto_trade(ticker, investment=5000):
 
     try:
         ema_200 = get_ema(df, period=200).iloc[-1]
-        price_ema_gap = (current_price - ema_200) / ema_200
 
         df_macd = calculate_macd(df)
         macd_now = df_macd['MACD'].iloc[-1]
@@ -108,7 +107,7 @@ def auto_trade(ticker, investment=5000):
                 CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
                     earned_money = upbit.get_balance("KRW") - buy_info['buy_price']
-                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2) * (-1)
+                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2)
                     print(f"[{ticker}] [익절 매도] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
                     prev_buy_dict[ticker] = None
                     return
@@ -143,6 +142,10 @@ def auto_trade(ticker, investment=5000):
                             ticker_balance_after = upbit.get_balance(ticker)
                             actual_buy_price = current_price
                             stop_loss_price = max(ema_200, get_recent_low(ticker))
+                            price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
+                            # if price_stop_gap < 0.005:
+                            #     print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
+                            #     return ##=======================================수정 필요 매수 실패했는데 매수 해버림...
                             if stop_loss_price == get_recent_low(ticker):
                                 take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 1.5
                             else:
@@ -182,7 +185,8 @@ def get_caution_tickers():
         market_event = item.get("market_event", {})
         warning = market_event.get("warning", False)
         caution_flags = market_event.get("caution", {})
-        if warning or any(caution_flags.values()):
+        # if warning or any(caution_flags.values()):
+        if warning:
             caution_tickers.append(market)
     return caution_tickers
 
