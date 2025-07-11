@@ -7,11 +7,7 @@ import os
 import logging
 import sys
 import requests
-from decimal import Decimal
-
-def count_decimal_places_decimal(num):
-    d = Decimal(str(num))
-    return -d.as_tuple().exponent if d.as_tuple().exponent < 0 else 0
+import json
 
 # === 로그 클래스 설정 ===
 class DualLogger:
@@ -142,30 +138,32 @@ def auto_trade(ticker, investment=5000):
                 if macd_now < 0 and signal_now < 0:
                     # if current_price > ema_200 and price_ema_gap >= 0.01:
                     if current_price > ema_200:
-                        order_amount = krw_balance * 0.995
+                        order_amount = round(krw_balance * 0.995, 0)
                         order_balance = round((order_amount) / current_price, 8)
                         result = upbit.buy_limit_order(ticker, order_amount, order_balance)
                         CANDIDATES = [ticker]
                         if result and 'uuid' in result:
                             ticker_balance_after = upbit.get_balance(ticker)
-                            actual_buy_price = current_price
                             stop_loss_price = max(ema_200, get_recent_low(ticker))
-                            stop_loss_price = round(stop_loss_price, count_decimal_places_decimal(stop_loss_price))
+                            with open("tick_sizes.json", "r", encoding="utf-8") as f:
+                                tick_sizes = json.load(f)
+                                tick = tick_sizes.get(ticker)
+                                stop_loss_price = round(stop_loss_price / tick) * tick
                             price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
                             # if price_stop_gap < 0.005:
                             #     print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
                             #     return ##=======================================수정 필요 매수 실패했는데 매수 해버림...
                             if stop_loss_price == get_recent_low(ticker):
-                                take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 1.5
+                                take_profit_price = current_price + (current_price - get_recent_low(ticker)) * 1.5
                             else:
-                                take_profit_price = actual_buy_price + (actual_buy_price - ema_200) * 1.5
-                            take_profit_price = round(take_profit_price, count_decimal_places_decimal(take_profit_price))
+                                take_profit_price = current_price + (current_price - ema_200) * 1.5
+                                take_profit_price = round(take_profit_price / tick) * tick
                             prev_buy_dict[ticker] = {
-                                'buy_price': actual_buy_price * ticker_balance_after,
+                                'buy_price': current_price * ticker_balance_after,
                                 'stop_loss': stop_loss_price,
                                 'take_profit': take_profit_price
                             }
-                            print(f"[{ticker}] [매수 성공 ({current_time})] {order_amount}원 / 현재가: {actual_buy_price:.2f}")
+                            print(f"[{ticker}] [매수 성공 ({current_time})] {order_amount}원 / 현재가: {current_price:.2f}")
                             print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
                             time.sleep(60)
                         else:
