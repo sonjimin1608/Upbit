@@ -7,6 +7,11 @@ import os
 import logging
 import sys
 import requests
+from decimal import Decimal
+
+def count_decimal_places_decimal(num):
+    d = Decimal(str(num))
+    return -d.as_tuple().exponent if d.as_tuple().exponent < 0 else 0
 
 # === 로그 클래스 설정 ===
 class DualLogger:
@@ -145,6 +150,7 @@ def auto_trade(ticker, investment=5000):
                             ticker_balance_after = upbit.get_balance(ticker)
                             actual_buy_price = current_price
                             stop_loss_price = max(ema_200, get_recent_low(ticker))
+                            stop_loss_price = round(stop_loss_price, count_decimal_places_decimal(stop_loss_price))
                             price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
                             # if price_stop_gap < 0.005:
                             #     print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
@@ -153,6 +159,7 @@ def auto_trade(ticker, investment=5000):
                                 take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 1.5
                             else:
                                 take_profit_price = actual_buy_price + (actual_buy_price - ema_200) * 1.5
+                            take_profit_price = round(take_profit_price, count_decimal_places_decimal(take_profit_price))
                             prev_buy_dict[ticker] = {
                                 'buy_price': actual_buy_price * ticker_balance_after,
                                 'stop_loss': stop_loss_price,
