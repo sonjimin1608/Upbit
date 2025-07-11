@@ -140,7 +140,8 @@ def auto_trade(ticker, investment=5000):
                     if current_price > ema_200:
                         order_amount = round(krw_balance * 0.995, 0)
                         order_balance = round((order_amount) / current_price, 8)
-                        result = upbit.buy_limit_order(ticker, order_amount, order_balance)
+                        print(order_amount,order_balance)
+                        result = upbit.buy_limit_order(ticker, current_price, order_balance)
                         CANDIDATES = [ticker]
                         if result and 'uuid' in result:
                             ticker_balance_after = upbit.get_balance(ticker)
@@ -173,7 +174,7 @@ def auto_trade(ticker, investment=5000):
         # 거래 없음 로그
         else:
             
-            print(f"[{ticker:<13}] [거래 없음 ({current_time})] MACD: {macd_now:<14.4f}, Signal: {signal_now:<14.4f}, 가격: {current_price:<13.2f}, EMA200: {ema_200:<13.2f}")
+            print(f"[{ticker:<13}] [거래 없음 ({current_time})] MACD: {macd_now:<14.4f}, Signal: {signal_now:<14.4f}, 가격: {current_price:<13}, EMA200: {ema_200:<13.2f}")
             
 
     except Exception as e:
