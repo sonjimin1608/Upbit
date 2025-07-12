@@ -136,31 +136,30 @@ def auto_trade(ticker, investment=5000):
                     # if current_price > ema_200 and price_ema_gap >= 0.01:
                     if current_price > ema_200:
                         order_amount = krw_balance * 0.99
-                        result = upbit.buy_market_order(ticker, order_amount)
-                        CANDIDATES = [ticker]
-                        if result and 'uuid' in result:
-                            ticker_balance_after = upbit.get_balance(ticker)
-                            actual_buy_price = current_price
-                            stop_loss_price = max(ema_200, get_recent_low(ticker))
-                            price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
-                            # if price_stop_gap < 0.005:
-                            #     print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
-                            #     return ##=======================================수정 필요 매수 실패했는데 매수 해버림...
-                            if stop_loss_price == get_recent_low(ticker):
-                                take_profit_price = actual_buy_price + (actual_buy_price - get_recent_low(ticker)) * 1.5
-                            else:
-                                take_profit_price = actual_buy_price + (actual_buy_price - ema_200) * 1.5
-                            prev_buy_dict[ticker] = {
-                                'buy_price': actual_buy_price * ticker_balance_after,
-                                'stop_loss': stop_loss_price,
-                                'take_profit': take_profit_price
-                            }
-                            print(f"[{ticker}] [매수 성공] {order_amount}원 / 현재가: {actual_buy_price:.2f}")
-                            print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
-                            time.sleep(120)
+                        ticker_balance_after = upbit.get_balance(ticker)
+                        stop_loss_price = max(ema_200, get_recent_low(ticker))
+                        price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
+                        if price_stop_gap < 0.001:
+                            print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
                         else:
-                            print(f"[{ticker}] [매수 실패] 주문 오류: {result}")
-                        return
+                            result = upbit.buy_market_order(ticker, order_amount)
+                            CANDIDATES = [ticker]
+                            if result and 'uuid' in result:                            
+                                if stop_loss_price == get_recent_low(ticker):
+                                    take_profit_price = current_price + (current_price - get_recent_low(ticker)) * 1.5
+                                else:
+                                    take_profit_price = current_price + (current_price - ema_200) * 1.5
+                                prev_buy_dict[ticker] = {
+                                    'buy_price': current_price * ticker_balance_after,
+                                    'stop_loss': stop_loss_price,
+                                    'take_profit': take_profit_price
+                                }
+                                print(f"[{ticker}] [매수 성공] {order_amount}원 / 현재가: {current_price:.2f}")
+                                print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
+                                time.sleep(120)
+                            else:
+                                print(f"[{ticker}] [매수 실패] 주문 오류: {result}")
+                            return
 
         # 거래 없음 로그
         else:
