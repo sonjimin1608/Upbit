@@ -64,6 +64,23 @@ def get_recent_low(ticker, interval="minute5", count=20):
         return None
     return df['low'].min()
 
+# === 승률 계산 함수 ===
+def read_win_rate():
+    with open("win_rate.txt", "r") as f:
+        lines = f.readlines()
+        win = int(lines[1][6:-1])
+        loss = int(lines[2][7:-1])
+        win_percentage = lines[3][17:-1]
+    return win, loss, win_percentage
+
+# === 승률 기록 함수 ===
+def record_win_rate(win, loss, win_percentage):
+    with open("win_rate.txt", "w") as f:
+        f.write("Win_Rate Data\n")
+        f.write(f"Win : {win}\n")
+        f.write(f"Lose : {loss}\n")
+        f.write(f"Win_Percentage : {win_percentage}\n")
+
 # === 자동매매 함수 ===
 def auto_trade(ticker, investment=5000):
     global prev_buy_dict
@@ -110,6 +127,8 @@ def auto_trade(ticker, investment=5000):
                     earned_money = upbit.get_balance("KRW") - buy_info['buy_amount']
                     earned_percentage = round((earned_money / buy_info['buy_amount']) * 100, 2)
                     print(f"[{ticker}] [익절 매도 (f{current_time})] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
+                    Win = Win + 1
+                    record_win_rate(Win, Lose, f"{(Win / (Win + Lose)) * 100:.2f}%")
                     prev_buy_dict[ticker] = None
                     return
 
@@ -126,6 +145,8 @@ def auto_trade(ticker, investment=5000):
                     loss_money = upbit.get_balance("KRW") - buy_info['buy_amount']
                     loss_percentage = round((loss_money / buy_info['buy_amount']) * 100, 2)
                     print(f"[{ticker}] [손절 매도 (f{current_time})] 현재가: {current_price:.2f}, 수익률: {loss_percentage}%")
+                    Lose = Lose + 1
+                    record_win_rate(Win, Lose, f"{(Win / (Win + Lose)) * 100:.2f}%")
                     prev_buy_dict[ticker] = None
                     return
             time.sleep(180)  # 매도 후 잠시 대기
@@ -237,12 +258,13 @@ if __name__ == "__main__":
     CANDIDATES = [ticker for ticker in CANDIDATES if ticker not in caution_tickers]
     CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
     CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
-
-
     # CANDIDATES = ['KRW-AERGO']
+    Win, Lose, Percentage = read_win_rate()
+    
     prev_buy_dict = {ticker: None for ticker in CANDIDATES}
-
+    
     print(f"=== 자동매매 시작: {', '.join(CANDIDATES)} ===")
+    print(f"=== 현재 승률: {Win}승 {Lose}패 ({Percentage}%) ===")
     while True:
         try:
             for ticker in CANDIDATES:
