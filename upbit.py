@@ -71,6 +71,7 @@ def auto_trade(ticker, investment=5000):
     current_balance = upbit.get_balance(ticker)
     krw_balance = upbit.get_balance("KRW")
     current_price = pyupbit.get_current_price(ticker)
+    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
     df = pyupbit.get_ohlcv(ticker, interval="minute5", count=200)
     if df is None or df.empty:
@@ -97,7 +98,7 @@ def auto_trade(ticker, investment=5000):
             take_profit_price = buy_info['take_profit']
 
             if current_price >= take_profit_price:
-                result = upbit.sell_market_order(ticker, current_balance)
+                result = upbit.sell_limit_order(ticker, current_price, current_balance)
                 krw_tickers = get_krw_market_tickers()
                 volume_df = get_ticker_volumes(krw_tickers)
                 CANDIDATES = volume_df['market'][:22]
@@ -106,14 +107,14 @@ def auto_trade(ticker, investment=5000):
                 CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
                 CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
-                    earned_money = upbit.get_balance("KRW") - buy_info['buy_price']
-                    earned_percentage = round(earned_money / buy_info['buy_price'] * 100, 2)
-                    print(f"[{ticker}] [익절 매도] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
+                    earned_money = upbit.get_balance("KRW") - buy_info['buy_amount']
+                    earned_percentage = round((earned_money / buy_info['buy_amount']) * 100, 2)
+                    print(f"[{ticker}] [익절 매도 (f{current_time})] 현재가: {current_price:.2f}, 수익률: {earned_percentage}%")
                     prev_buy_dict[ticker] = None
                     return
 
             elif current_price < stop_loss_price:
-                result = upbit.sell_market_order(ticker, current_balance)
+                result = upbit.sell_limit_order(ticker, current_price, current_balance)
                 krw_tickers = get_krw_market_tickers()
                 volume_df = get_ticker_volumes(krw_tickers)
                 CANDIDATES = volume_df['market'][:22]
@@ -122,11 +123,12 @@ def auto_trade(ticker, investment=5000):
                 CANDIDATES = [ticker for ticker in CANDIDATES if "XRP" not in ticker]
                 CANDIDATES = [ticker for ticker in CANDIDATES if "USDT" not in ticker]
                 if result and 'uuid' in result:
-                    loss_money = upbit.get_balance("KRW") - buy_info['buy_price']
-                    loss_percentage = round(loss_money / buy_info['buy_price'] * 100, 2) * (-1)
-                    print(f"[{ticker}] [손절 매도] 현재가: {current_price:.2f}, 수익률: {loss_percentage}%")
+                    loss_money = upbit.get_balance("KRW") - buy_info['buy_amount']
+                    loss_percentage = round((loss_money / buy_info['buy_amount']) * 100, 2)
+                    print(f"[{ticker}] [손절 매도 (f{current_time})] 현재가: {current_price:.2f}, 수익률: {loss_percentage}%")
                     prev_buy_dict[ticker] = None
                     return
+            time.sleep(180)  # 매도 후 잠시 대기
 
         # 매수 조건
         
@@ -136,13 +138,16 @@ def auto_trade(ticker, investment=5000):
                     # if current_price > ema_200 and price_ema_gap >= 0.01:
                     if current_price > ema_200:
                         order_amount = krw_balance * 0.99
-                        ticker_balance_after = upbit.get_balance(ticker)
+                        
                         stop_loss_price = max(ema_200, get_recent_low(ticker))
                         price_stop_gap = (current_price - stop_loss_price) / stop_loss_price
                         if price_stop_gap < 0.001:
                             print(f"[매수 실패] | 현재 가격 : {current_price}, 손절가 : {stop_loss_price}, 차이 : {price_stop_gap}")
                         else:
-                            result = upbit.buy_market_order(ticker, order_amount)
+                            order_amount = round(krw_balance * 0.995, 0)
+                            current_price = pyupbit.get_current_price(ticker) # 가격 최신화
+                            order_balance = round((order_amount) / current_price, 8)
+                            result = upbit.buy_limit_order(ticker, current_price, order_balance)
                             CANDIDATES = [ticker]
                             if result and 'uuid' in result:                            
                                 if stop_loss_price == get_recent_low(ticker):
@@ -150,7 +155,7 @@ def auto_trade(ticker, investment=5000):
                                 else:
                                     take_profit_price = current_price + (current_price - ema_200) * 1.5
                                 prev_buy_dict[ticker] = {
-                                    'buy_price': current_price * ticker_balance_after,
+                                    'buy_amount': current_price * order_balance,
                                     'stop_loss': stop_loss_price,
                                     'take_profit': take_profit_price
                                 }
@@ -163,7 +168,6 @@ def auto_trade(ticker, investment=5000):
 
         # 거래 없음 로그
         else:
-            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             print(f"[{ticker:<13}] [거래 없음 ({current_time})] MACD: {macd_now:<14.4f}, Signal: {signal_now:<14.4f}, 가격: {current_price:<13.2f}, EMA200: {ema_200:<13.2f}")
             
 
