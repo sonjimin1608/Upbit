@@ -266,6 +266,30 @@ if __name__ == "__main__":
     Win, Lose, Percentage = read_win_rate()
     
     prev_buy_dict = {ticker: None for ticker in CANDIDATES}
+    my_ticker = []
+    balances = upbit.get_balances()
+    stop_loss_ratio = 0.973  # 손절가: 평균매수가의 95%
+    take_profit_ratio = 1.05  # 익절가: 평균매수가의 110%
+    
+    for b in balances:
+        if b['currency'] not in ['KRW', 'XRP']:
+            if float(b['balance']) > 0 or float(b['locked']) > 0:
+                ticker_name = f"KRW-{b['currency']}"
+                my_ticker.append(ticker_name)
+                avg_buy_price = float(b['avg_buy_price'])
+                balance = float(b['balance'])
+                buy_amount = avg_buy_price * balance
+                stop_loss = avg_buy_price * stop_loss_ratio
+                take_profit = avg_buy_price * take_profit_ratio
+    
+                prev_buy_dict[ticker_name] = {
+                    'buy_amount': buy_amount,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit
+                }
+    
+    if my_ticker:
+        CANDIDATES = my_ticker
     
     print(f"=== 자동매매 시작: {', '.join(CANDIDATES)} ===")
     print(f"=== 현재 승률: {Win}승 {Lose}패 ({Percentage}%) ===")
