@@ -85,6 +85,7 @@ def record_win_rate(win, loss, win_percentage):
 def auto_trade(ticker, investment=5000):
     global prev_buy_dict
     global CANDIDATES
+    global Win, Lose
     current_balance = upbit.get_balance(ticker)
     krw_balance = upbit.get_balance("KRW")
     current_price = pyupbit.get_current_price(ticker)
@@ -149,6 +150,7 @@ def auto_trade(ticker, investment=5000):
                     record_win_rate(Win, Lose, f"{(Win / (Win + Lose)) * 100:.2f}%")
                     prev_buy_dict[ticker] = None
                     return
+            print("매도 대기")
             time.sleep(180)  # 매도 후 잠시 대기
 
         # 매수 조건
