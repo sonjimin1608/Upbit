@@ -132,6 +132,8 @@ def auto_trade(ticker, investment=5000):
                     record_win_rate(Win, Lose, f"{(Win / (Win + Lose)) * 100:.2f}%")
                     prev_buy_dict[ticker] = None
                     return
+                print("매도 대기")
+                time.sleep(180)  # 매도 후 잠시 대기
 
             elif current_price < stop_loss_price:
                 result = upbit.sell_limit_order(ticker, current_price, current_balance)
@@ -150,8 +152,8 @@ def auto_trade(ticker, investment=5000):
                     record_win_rate(Win, Lose, f"{(Win / (Win + Lose)) * 100:.2f}%")
                     prev_buy_dict[ticker] = None
                     return
-            print("매도 대기")
-            time.sleep(180)  # 매도 후 잠시 대기
+                print("매도 대기")
+                time.sleep(180)  # 매도 후 잠시 대기
 
         # 매수 조건
         
@@ -184,7 +186,7 @@ def auto_trade(ticker, investment=5000):
                                 }
                                 print(f"[{ticker}] [매수 성공] {order_amount}원 / 현재가: {current_price:.2f}")
                                 print(f"[{ticker}] 손절가: {stop_loss_price:.2f}, 익절가: {take_profit_price:.2f}")
-                                time.sleep(120)
+                                time.sleep(120) # 매수 후 대기
                             else:
                                 print(f"[{ticker}] [매수 실패] 주문 오류: {result}")
                             return
