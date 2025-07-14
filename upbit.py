@@ -268,8 +268,8 @@ if __name__ == "__main__":
     prev_buy_dict = {ticker: None for ticker in CANDIDATES}
     my_ticker = []
     balances = upbit.get_balances()
-    stop_loss_ratio = 0.973  # 손절가: 평균매수가의 95%
-    take_profit_ratio = 1.05  # 익절가: 평균매수가의 110%
+    stop_loss_ratio = 0.98  # 손절가: 평균매수가의 95%
+    take_profit_ratio = 1.03  # 익절가: 평균매수가의 110%
     
     for b in balances:
         if b['currency'] not in ['KRW', 'XRP']:
